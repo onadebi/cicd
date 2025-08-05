@@ -38,6 +38,42 @@ param functionAppServicePlanName string = 'onaxgenai-app-svc'
 @allowed(['FC1','Y1'])
 param functionAppSkuName string = 'FC1'
 
+param storageAccountName string = 'onaxgenaist${uniqueString(resourceGroup().id)}'
+
+resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: storageAccountName
+  location: 'Canada Central'
+  sku: {
+    name: 'Standard_LRS'
+  }
+  kind: 'StorageV2'
+  properties: {
+    supportsHttpsTrafficOnly: true
+    defaultToOAuthAuthentication: true
+  }
+}
+
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
+  parent: storageAccount
+  name: 'default'
+}
+
+resource deploymentContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: 'deployments'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+resource functionAppContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobService
+  name: 'function-app-data'
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
 resource functionAppServicePlan 'Microsoft.Web/serverfarms@2024-04-01' = {
   name: functionAppServicePlanName
   location: 'Canada Central'
@@ -59,10 +95,45 @@ resource functionApp 'Microsoft.Web/sites@2024-04-01' = {
     serverFarmId: functionAppServicePlan.id
     httpsOnly: true
     reserved: true
+    functionAppConfig: {
+      deployment: {
+        storage: {
+          type: 'blobContainer'
+          value: 'https://${storageAccount.name}.blob.${environment().suffixes.storage}/${deploymentContainer.name}'
+          authentication: {
+            type: 'StorageAccountConnectionString'
+            storageAccountConnectionStringName: 'AzureWebJobsStorage'
+          }
+        }
+      }
+      runtime: {
+        name: 'python'
+        version: '3.12'
+      }
+      scaleAndConcurrency: {
+        maximumInstanceCount: 200
+        instanceMemoryMB: 2048
+      }
+    }
     siteConfig: {
-      linuxFxVersion: 'Python|3.12'
+      appSettings: [
+        {
+          name: 'AzureWebJobsStorage'
+          value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${storageAccount.listKeys().keys[0].value}'
+        }
+        {
+          name: 'FUNCTIONS_EXTENSION_VERSION'
+          value: '~4'
+        }
+        {
+          name: 'BLOB_STORAGE_CONNECTION_STRING'
+          value: 'DefaultEndpointsProtocol=https;AccountName=${storageAccount.name};EndpointSuffix=${environment().suffixes.storage};AccountKey=${storageAccount.listKeys().keys[0].value}'
+        }
+        {
+          name: 'BLOB_CONTAINER_NAME'
+          value: functionAppContainer.name
+        }
+      ]
     }
   }
-  
-
 }
